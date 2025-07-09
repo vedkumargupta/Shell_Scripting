@@ -1,8 +1,8 @@
 # This example is on how to use for loop to run commands against multiple ips.
 # Content of ips.txt
  cat ips.txt
-mtllacsotp
-mtllacsolt
+mtlinux01
+mtlinux02
 
 
 for i in $(cat ips.txt); do nslookup $i; done
@@ -15,7 +15,7 @@ Address: 172.27.200.23
 ###################################
 
  for i in $(cat ips.txt); do ssh root@$i "uptime"; done
-root@mtllacsotp's password:
+root@mtlinux01's password:
  05:39:27 up 160 days, 11:34,  0 users,  load average: 2.81, 2.64, 3.22
-root@mtllacsolt's password:
+root@mtlinux02's password:
  05:39:29 up 108 days,  9:56,  0 users,  load average: 0.16, 0.07, 0.01
