@@ -1,0 +1,99 @@
+#!/bin/bash
+
+# Configuration
+DAYS_TO_CHECK=7
+LOG_FILE="server_activity_report_$(date +%Y%m%d_%H%M%S).txt"
+START_DATE=$(date -d "$DAYS_TO_CHECK days ago" +%Y-%m-%d)
+
+# --- Functions ---
+
+# Function to check user logins in the last X days
+check_logins() {
+    echo "## 👥 User Login Report (Last $DAYS_TO_CHECK Days)"
+    echo "---"
+
+    echo "Filtering login records from /var/log/wtmp since: **$START_DATE**"
+    echo ""
+
+    # 1. Use 'last -F' for full login/logout records.
+    # 2. Use '--since' to filter records natively (requires GNU last, common on most modern Linux distros).
+    # 3. Use grep to exclude system events (reboot, shutdown, wtmp).
+    # 4. Use awk to isolate the username (first field).
+    # 5. Use sort -u to list unique usernames.
+
+    # Check if 'last --since' is supported before running (e.g., in a simple way)
+    if ! last --help 2>&1 | grep -q -- --since; then
+        echo "WARNING: 'last --since' not supported. Falling back to simple 'last | head' which may be inaccurate."
+        last | head -n 50 | grep -v 'reboot system' | awk '{print $1}' | sort -u
+    else
+        last -F --since "$START_DATE" | \
+        grep -E -v 'reboot|shutdown|system|wtmp|log|runlevel' | \
+        awk '{print $1}' | \
+        sort -u
+    fi
+
+    echo "---"
+    echo "NOTE: Users listed above are the unique users who logged in successfully."
+}
+
+# Function to attempt to identify who initiated the last reboot
+check_reboot_initiator() {
+    echo -e "\n## ♻️ Last Server Reboot Check"
+    echo "---"
+
+    # Get the last boot time
+    BOOT_TIME_WHO=$(who -b | awk '{print $3 " " $4}')
+    BOOT_TIME_LAST=$(last reboot | head -n 1 | awk '{print $5, $6, $7, $8}')
+
+    if [ -z "$BOOT_TIME_WHO" ]; then
+        echo "Could not retrieve the last boot time."
+        return
+    fi
+
+    echo "Last Boot Time (who -b): **$BOOT_TIME_WHO**"
+    echo "Last Reboot Log Entry: **$BOOT_TIME_LAST**"
+
+    # 1. Look for 'shutdown' or 'reboot' events in /var/log/wtmp (using 'last')
+    echo -e "\n1. Checking 'last' for user session immediately preceding the reboot:"
+    # Search the history for the 'reboot' entry and the record right before it (the user who logged out/action).
+    echo "--- Output of last | grep -B 1 'reboot system' ---"
+    last | grep -B 1 "reboot system" | head -n 2
+
+    # 2. Search common logs for the 'shutdown' or 'reboot' command
+    echo -e "\n2. Searching system logs for reboot/shutdown command near the boot time:"
+    echo "--- Check /var/log/auth.log or /var/log/secure for 'sudo reboot' ---"
+
+    # Search for logs containing 'reboot', 'shutdown', or 'poweroff' that were run via sudo
+    # Search common log files for security/authentication events
+    for LOG in /var/log/auth.log /var/log/secure; do
+        if [ -f "$LOG" ]; then
+            echo "--- Checking $LOG ---"
+            # Use 'grep' to find the command and pipe it to 'tail' to only show the last 10 entries
+            grep -i 'reboot\|shutdown\|poweroff' "$LOG" | tail -n 10
+        fi
+    done
+
+    # Check journalctl for systemd-based systems
+    if command -v journalctl >/dev/null 2>&1; then
+        echo -e "\n--- Checking journalctl for the previous boot (-b -1) ---"
+        # -b -1 is the previous boot. -e shows the end (shutdown) events.
+        journalctl -b -1 --no-pager | grep -i 'shutdown\|reboot\|poweroff' | tail -n 10
+        echo "The user who ran the shutdown command (e.g., 'COMMAND=/sbin/reboot') will often appear here."
+    fi
+
+    echo -e "\n**CONCLUSION:** The user who logged in or ran a command right before the 'reboot system' entry in 'last' (line 1 output) or the user who executed the 'COMMAND=/bin/systemctl reboot' (line 2 output) is the most likely initiator."
+}
+
+# --- Main Execution ---
+
+echo "--- Generating Server Activity Report ---" > "$LOG_FILE"
+{
+    check_logins
+    check_reboot_initiator
+} >> "$LOG_FILE"
+
+echo -e "\n✅ **Report Complete!**"
+echo "The full report has been saved to: **$LOG_FILE**"
+echo "To view the report, run: **cat $LOG_FILE**"
+echo ""
+echo "---"
